@@ -24,7 +24,7 @@ parser.add_argument("--mask_sidechains_add_cb", action='store_true', help="mask 
 parser.add_argument("--seq_replacement", default='', help="Amino acid residue to fill the decoy sequence with. Default keeps target sequence")
 parser.add_argument("--af2_dir", default="/n/home01/jroney/alphafold-latest/", help="AlphaFold code and weights directory")
 parser.add_argument("--decoy_dir", default="/n/home01/jroney/template_injection/decoy_set/", help="Rosetta decoy directory")
-parser.add_argument("--output_dir", default="/n/ovchinnikov_lab/Lab/af2rank/outputs/", help="Rosetta decoy directory")
+parser.add_argument("--output_dir", default="/piercehome/yinr/AF2Rank/experiments/0706_test_run/", help="Rosetta decoy directory")
 parser.add_argument("--tm_exec", default="/n/home01/jroney/tmscore/TMscore", help="TMScore executable")
 
 args = parser.parse_args()
