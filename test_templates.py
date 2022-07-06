@@ -22,10 +22,10 @@ parser.add_argument("--use_native", action='store_true', help="add the native st
 parser.add_argument("--mask_sidechains", action='store_true', help="mask out sidechain atoms except for C-Beta")
 parser.add_argument("--mask_sidechains_add_cb", action='store_true', help="mask out sidechain atoms except for C-Beta, and add C-Beta to glycines")
 parser.add_argument("--seq_replacement", default='', help="Amino acid residue to fill the decoy sequence with. Default keeps target sequence")
-parser.add_argument("--af2_dir", default="/n/home01/jroney/alphafold-latest/", help="AlphaFold code and weights directory")
-parser.add_argument("--decoy_dir", default="/piercehome/yinr/AF2Rank/decoys", help="Rosetta decoy directory")
-parser.add_argument("--output_dir", default="/piercehome/yinr/AF2Rank/experiments/0706_test_run/", help="Rosetta decoy directory")
-parser.add_argument("--tm_exec", default="/n/home01/jroney/tmscore/TMscore", help="TMScore executable")
+parser.add_argument("--af2_dir", default="/piercehome/yinr/alphafold/alphafold_v2.2/", help="AlphaFold code and weights directory")
+parser.add_argument("--decoy_dir", default="/piercehome/yinr/AF2Rank/decoys/", help="Rosetta decoy directory")
+parser.add_argument("--output_dir", default="/piercehome/yinr/AF2Rank/experiments/", help="Rosetta decoy directory")
+parser.add_argument("--tm_exec", default="/home/yinr/TMscore/TMscore", help="TMScore executable")
 
 args = parser.parse_args()
 
@@ -87,7 +87,7 @@ def make_model_runner(name, recycles):
   if args.deterministic:
     cfg.data.eval.masked_msa_replace_fraction = 0.0
     cfg.model.global_config.deterministic = True
-  params = data.get_model_haiku_params(name, args.af2_dir + 'data/')
+  params = data.get_model_haiku_params(name, "/piercehome/alphafold/genetic_databases/")
 
   return model.RunModel(cfg, params)
 
