@@ -23,10 +23,13 @@ parser.add_argument("--use_native", action='store_true', help="add the native st
 parser.add_argument("--mask_sidechains", action='store_true', help="mask out sidechain atoms except for C-Beta")
 parser.add_argument("--mask_sidechains_add_cb", action='store_true', help="mask out sidechain atoms except for C-Beta, and add C-Beta to glycines")
 parser.add_argument("--seq_replacement", default='', help="Amino acid residue to fill the decoy sequence with. Default keeps target sequence")
-parser.add_argument("--af2_dir", default="/piercehome/yinr/alphafold/alphafold_v2.2/", help="AlphaFold code and weights directory")
+parser.add_argument("--af2_dir", default="/piercehome/yinr/alphafold/alphafold_v2.2_af2rank/", help="AlphaFold code and weights directory")
 parser.add_argument("--decoy_dir", default="/piercehome/yinr/AF2Rank/decoys/", help="Rosetta decoy directory")
 parser.add_argument("--output_dir", default="/piercehome/yinr/AF2Rank/experiments/", help="Rosetta decoy directory")
 parser.add_argument("--tm_exec", default="/home/yinr/TMscore/TMscore", help="TMScore executable")
+parser.add_argument("--save_raw_features", action='store_true', help="save raw result features for whatever future use")
+
+# parser.add_argument("--all_seqs", type=str, help=":delimited sequence of multimer")
 
 args = parser.parse_args()
 
@@ -44,7 +47,15 @@ from alphafold.common import residue_constants
 
 
 # helper functions
-
+def chain_break(idx_res, Ls, length=200):
+  # Minkyung's code
+  # add big enough number to residue index to indicate chain breaks
+  L_prev = 0
+  for L_i in Ls[:-1]:
+    idx_res[L_prev+L_i:] += length
+    L_prev += L_i      
+  return idx_res
+  
 """
 Read in a PDB file from a path
 """
@@ -136,6 +147,26 @@ def make_processed_feature_dict(runner, sequence, name="test", templates=None, s
 
   return processed_feature_dict
 
+def make_processed_gap_feature_dict(runner, Ls, sequence, name="test", templates=None, seed=0):
+  feature_dict = {}
+  feature_dict.update(pipeline.make_sequence_features(sequence, name, len(sequence)))
+
+  msa = pipeline.parsers.parse_a3m(">1\n%s" % sequence)
+
+  feature_dict.update(pipeline.make_msa_features([msa]))
+
+  if templates is not None:
+    feature_dict.update(templates)
+  else:
+    feature_dict.update(empty_placeholder_template_features(num_templates=0, num_res=len(sequence)))
+
+  feature_dict["residue_index"] = chain_break(feature_dict["residue_index"], Ls)
+  feature_dict["asym_id"] = np.array(
+    [int(n) for n, l in enumerate(Ls) for _ in range(0, l)]
+  )
+  processed_feature_dict = runner.process_features(feature_dict, random_seed=seed)
+
+  return processed_feature_dict
 """
 Package AlphFold's output into an easy-to-use dictionary
 prediction_result - output from running AlphaFold on an input dictionary
@@ -178,26 +209,26 @@ decoy_prot -- the decoy structure to be injected as a template
 model_runner -- the model runner to execute
 name -- the name associated with this prediction
 """
-def score_decoy(target_seq, decoy_prot, model_runner, name):
+def score_decoy(target_seq, decoy_prot, model_runner, name, raw_feature_fn):
   decoy_seq_in = "".join([residue_constants.restypes[x] for x in decoy_prot.aatype]) # the sequence in the decoy PDB file
 
   mismatch = False
-  if decoy_seq_in == target_seq:
-    assert jnp.all(prot.residue_index - 1 == np.arange(len(target_seq)))
-  else: # case when template is missing some residues
-    if args.verbose:
-      print("Sequece mismatch: {}".format(name))
-    mismatch=True
+  # if decoy_seq_in == target_seq:
+  #   assert jnp.all(prot.residue_index - 1 == np.arange(len(target_seq)))
+  # else: # case when template is missing some residues
+  #   if args.verbose:
+  #     print("Sequece mismatch: {}".format(name))
+  #   mismatch=True
 
-    assert "".join(target_seq[i-1] for i in decoy_prot.residue_index) == decoy_seq_in 
-  print("decoy_seq_in=",str(decoy_seq_in))
+    # assert "".join(target_seq[i-1] for i in decoy_prot.residue_index) == decoy_seq_in 
+  # print("decoy_seq_in=",str(decoy_seq_in))
   # use this to index into the template features
   template_idxs = prot.residue_index-1
   template_idx_set = set(template_idxs)
 
   # The sequence associated with the decoy. Always has same length as target sequence.
   decoy_seq = args.seq_replacement*len(target_seq) if len(args.seq_replacement) == 1 else target_seq
-  print("decoy_seq=",str(decoy_seq))
+  # print("decoy_seq=",str(decoy_seq))
 
   # create empty template features
   pos = np.zeros([1,len(decoy_seq), 37, 3])
@@ -241,9 +272,8 @@ def score_decoy(target_seq, decoy_prot, model_runner, name):
                 "template_all_atom_masks":decoy_prot.atom_mask[None],
                 "template_all_atom_positions":decoy_prot.atom_positions[None],
                 "template_domain_names":np.asarray(["None"])}
-
-  features = make_processed_feature_dict(runner, target_seq, name=name, templates=template, seed=args.seed)
-  result = parse_results(runner.predict(features, random_seed=args.seed), features)
+  features = make_processed_gap_feature_dict(runner, Ls, target_seq, name=name, templates=template, seed=args.seed)
+  result = parse_results(runner.predict(features, args.save_raw_features, raw_feature_fn, random_seed=args.seed), features)
   return result, mismatch
 
 
@@ -290,26 +320,27 @@ csv_headers = decoy_fields_list + ['output_path', 'rmsd_out', 'tm_diff', 'tm_out
 def write_results(decoy, af_result, prot_native=None, mismatch=False):
   plddt = float(result['pLDDT'])
   ptm = float(result["pTMscore"])
-  if prot_native is None:
-    rms_out = -1
-  else:
-    rms_out = jnp_rmsd(prot_native.atom_positions[:,1,:], result['unrelaxed_protein'].atom_positions[:,1,:])
+  # if prot_native is None:
+  #   rms_out = -1
+  # else:
+  #   rms_out = jnp_rmsd(prot_native.atom_positions[:,1,:], result['unrelaxed_protein'].atom_positions[:,1,:])
+  rms_out=-1
 
   pdb_lines = protein.to_pdb(result["unrelaxed_protein"])
   pdb_out_path = args.output_dir + args.name + "/pdbs/" + decoy.target + "_" + decoy.decoy_id
   with open(pdb_out_path, 'w') as f:
     f.write(pdb_lines)
 
-  if decoy.decoy_id != "none.pdb":
-    tm_diff = compute_tmscore(decoy.decoy_path, pdb_out_path, test_len = not mismatch)
-  else:
-    tm_diff = -1
-
-  if prot_native is None:
-    tm_out = -1
-  else:
-    tm_out = compute_tmscore(pdb_out_path, pdb_native)
-
+  # if decoy.decoy_id != "none.pdb":
+  #   tm_diff = compute_tmscore(decoy.decoy_path, pdb_out_path, test_len = not mismatch)
+  # else:
+  #   tm_diff = -1
+  tm_diff = -1
+  # if prot_native is None:
+  #   tm_out = -1
+  # else:
+  #   tm_out = compute_tmscore(pdb_out_path, pdb_native)
+  tm_out = -1
   if not os.path.exists(args.output_dir + args.name + "/results/results_{}.csv".format(decoy.target)):
     with open(args.output_dir + args.name + "/results/results_{}.csv".format(decoy.target), "w") as f:
       f.write(",".join(csv_headers) + "\n")
@@ -394,25 +425,28 @@ for n in natives_list:
   prot_native = protein.from_pdb_string(pdb_to_string(pdb_native))
   seq_native = "".join([residue_constants.restypes[x] for x in prot_native.aatype])
   runner = make_model_runner(model_name, args.recycles)
+  Ls=np.bincount(prot_native.chain_index).tolist()
 
-  if n + "_none.pdb" not in finished_decoys:
+  # if n + "_none.pdb" not in finished_decoys:
 
-    # run the model with no templates
-    features = make_processed_feature_dict(runner, seq_native, name=n + "_none", seed=args.seed)
-    result = parse_results(runner.predict(features, random_seed=args.seed), features)
-    with open("/piercehome/yinr/AF2Rank/experiments/0718_test/processed_feature_dict.pkl", 'wb') as fh:
-      pkl.dump(features, fh,protocol=4)
-    with open("/piercehome/yinr/AF2Rank/experiments/0718_test/prediction_results.pkl", 'wb') as fh:
-      pkl.dump(result, fh,protocol=4)
+  #   # run the model with no templates
+  #   features = make_processed_gap_feature_dict(runner, Ls, seq_native, name=n + "_none", seed=args.seed)
+  #   result = parse_results(runner.predict(features, random_seed=args.seed), features)
+  #   with open("/piercehome/yinr/AF2Rank/experiments/0725_gap/processed_feature_dict.pkl", 'wb') as fh:
+  #     pkl.dump(features, fh,protocol=4)
+  #   with open("/piercehome/yinr/AF2Rank/experiments/0725_gap/prediction_results.pkl", 'wb') as fh:
+  #     pkl.dump(result, fh,protocol=4)
 
-    dummy_decoy = Decoy(target=n, decoy_id="none.pdb", decoy_path="_", rmsd=-1, rosettascore=-1, gdt_ts=-1, tmscore=-1,danscore=-1)
-    write_results(dummy_decoy, result, prot_native=prot_native if args.use_native else None)
+  #   dummy_decoy = Decoy(target=n, decoy_id="none.pdb", decoy_path="_", rmsd=-1, rosettascore=-1, gdt_ts=-1, tmscore=-1,danscore=-1)
+
+  #   write_results(dummy_decoy, result, prot_native=prot_native if args.use_native else None)
 
 
   # run the model with all of the decoys passed as templates
   for d in decoy_dict[n]:
     prot = protein.from_pdb_string(pdb_to_string(d.decoy_path))
-    result, mismatch = score_decoy(seq_native, prot, runner, d.target + "_" + d.decoy_id)
+    raw_feature_fn = args.output_dir + args.name + d.target + "_" + d.decoy_id + "_raw_results.pkl"
+    result, mismatch = score_decoy(seq_native, prot, runner, d.target + "_" + d.decoy_id, raw_feature_fn)
     write_results(d, result, prot_native=prot_native if args.use_native else None, mismatch=mismatch)
 
 
