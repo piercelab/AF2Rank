@@ -272,6 +272,7 @@ def score_decoy(target_seq, decoy_prot, model_runner, name, raw_feature_fn):
                 "template_all_atom_masks":decoy_prot.atom_mask[None],
                 "template_all_atom_positions":decoy_prot.atom_positions[None],
                 "template_domain_names":np.asarray(["None"])}
+
   features = make_processed_gap_feature_dict(runner, Ls, target_seq, name=name, templates=template, seed=args.seed)
   result = parse_results(runner.predict(features, args.save_raw_features, raw_feature_fn, random_seed=args.seed), features)
   return result, mismatch
@@ -317,9 +318,28 @@ Decoy = namedtuple("Decoy", decoy_fields_list)
 # headers for csv outputs
 csv_headers = decoy_fields_list + ['output_path', 'rmsd_out', 'tm_diff', 'tm_out', 'plddt', 'ptm']
 
-def write_results(decoy, af_result, prot_native=None, mismatch=False):
+def generate_iptm_scores(features, asym_id):
+  from alphafold.common import confidence
+  return confidence.predicted_tm_score(
+     logits=features['predicted_aligned_error']['logits'],
+     breaks=features['predicted_aligned_error']['breaks'],
+     asym_id=asym_id,
+     interface=True)
+
+def write_results(decoy, result, prot_native=None, mismatch=False):
+# def write_results(decoy, raw_feature_fn, raw_asym_id, interfaces, prot_native=None, mismatch=False):
   plddt = float(result['pLDDT'])
   ptm = float(result["pTMscore"])
+  # iptm = []
+
+
+  # with open(raw_feature_fn, 'rb') as fh:
+  #     raw_features=pkl.load(fh)
+  # for interface in interfaces:
+  #   new_asym_id=raw_asym_id
+  #   for new_index, old_index in enumerate(interface):
+  #     new_asym_id.
+
   # if prot_native is None:
   #   rms_out = -1
   # else:
@@ -358,6 +378,7 @@ def write_results(decoy, af_result, prot_native=None, mismatch=False):
 os.makedirs(args.output_dir + args.name, exist_ok=True)
 os.makedirs(args.output_dir + args.name + "/pdbs", exist_ok=True)
 os.makedirs(args.output_dir + args.name + "/results", exist_ok=True)
+os.makedirs(args.output_dir + args.name + "/features", exist_ok=True)
 
 if len(args.targets_file) > 0:
   natives_list = open(args.targets_file, 'r').read().split("\n")[:-1]
@@ -422,32 +443,21 @@ results_key = model_name + "_seed_{}".format(args.seed)
 for n in natives_list:
 
   pdb_native = args.decoy_dir + "native_pdbs/" + n + ".pdb"
-  prot_native = protein.from_pdb_string(pdb_to_string(pdb_native))
-  seq_native = "".join([residue_constants.restypes[x] for x in prot_native.aatype])
-  runner = make_model_runner(model_name, args.recycles)
-  Ls=np.bincount(prot_native.chain_index).tolist()
-
-  # if n + "_none.pdb" not in finished_decoys:
-
-  #   # run the model with no templates
-  #   features = make_processed_gap_feature_dict(runner, Ls, seq_native, name=n + "_none", seed=args.seed)
-  #   result = parse_results(runner.predict(features, random_seed=args.seed), features)
-  #   with open("/piercehome/yinr/AF2Rank/experiments/0725_gap/processed_feature_dict.pkl", 'wb') as fh:
-  #     pkl.dump(features, fh,protocol=4)
-  #   with open("/piercehome/yinr/AF2Rank/experiments/0725_gap/prediction_results.pkl", 'wb') as fh:
-  #     pkl.dump(result, fh,protocol=4)
-
-  #   dummy_decoy = Decoy(target=n, decoy_id="none.pdb", decoy_path="_", rmsd=-1, rosettascore=-1, gdt_ts=-1, tmscore=-1,danscore=-1)
-
-  #   write_results(dummy_decoy, result, prot_native=prot_native if args.use_native else None)
-
+  # prot_native = protein.from_pdb_string(pdb_to_string(pdb_native))
+  # seq_native = "".join([residue_constants.restypes[x] for x in prot_native.aatype])
+  # runner = make_model_runner(model_name, args.recycles)
+  # Ls=np.bincount(prot_native.chain_index).tolist()
 
   # run the model with all of the decoys passed as templates
   for d in decoy_dict[n]:
     prot = protein.from_pdb_string(pdb_to_string(d.decoy_path))
-    raw_feature_fn = args.output_dir + args.name + d.target + "_" + d.decoy_id + "_raw_results.pkl"
-    result, mismatch = score_decoy(seq_native, prot, runner, d.target + "_" + d.decoy_id, raw_feature_fn)
-    write_results(d, result, prot_native=prot_native if args.use_native else None, mismatch=mismatch)
+    seq_native = "".join([residue_constants.restypes[x] for x in prot.aatype])
+    runner = make_model_runner(model_name, args.recycles)
+    Ls=np.bincount(prot.chain_index).tolist()
+
+    raw_feature_fn = args.output_dir + "/features/" + args.name + "_" + d.decoy_id + "_raw_results.pkl"
+    result, mismatch = score_decoy(seq_native, prot, runner, d.decoy_id, raw_feature_fn)
+    write_results(d, result, prot_native=prot if args.use_native else None, mismatch=mismatch)
 
 
   with open(args.output_dir + args.name + "/finished_targets.txt", 'a') as f:
