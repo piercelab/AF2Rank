@@ -28,6 +28,8 @@ parser.add_argument("--decoy_dir", default="/piercehome/yinr/AF2Rank/decoys/", h
 parser.add_argument("--output_dir", default="/piercehome/yinr/AF2Rank/experiments/", help="Rosetta decoy directory")
 parser.add_argument("--tm_exec", default="/home/yinr/TMscore/TMscore", help="TMScore executable")
 parser.add_argument("--save_raw_features", action='store_true', help="save raw result features for whatever future use")
+parser.add_argument("--interfaces", type=str, help="comma seperated string of interfaces, for example, 0:1:2:3,0:0:1:1")
+
 
 # parser.add_argument("--all_seqs", type=str, help=":delimited sequence of multimer")
 
@@ -56,6 +58,14 @@ def chain_break(idx_res, Ls, length=200):
     L_prev += L_i      
   return idx_res
   
+
+def interface_parser(interfaces_string):
+  interfaces=[]
+  for interface in interfaces_string.split(","):
+    interfaces.append([int(i) for i in interface.split(":")])
+  return interfaces
+
+# print(interface_parser(args.interfaces))
 """
 Read in a PDB file from a path
 """
@@ -326,20 +336,26 @@ def generate_iptm_scores(features, asym_id):
      asym_id=asym_id,
      interface=True)
 
-def write_results(decoy, result, prot_native=None, mismatch=False):
-# def write_results(decoy, raw_feature_fn, raw_asym_id, interfaces, prot_native=None, mismatch=False):
+# def write_results(decoy, result, prot_native=None, mismatch=False):
+def write_results(decoy, result, raw_feature_fn, raw_asym_id, interfaces, prot_native=None, mismatch=False):
   plddt = float(result['pLDDT'])
   ptm = float(result["pTMscore"])
-  # iptm = []
+  iptm = []
 
 
-  # with open(raw_feature_fn, 'rb') as fh:
-  #     raw_features=pkl.load(fh)
-  # for interface in interfaces:
-  #   new_asym_id=raw_asym_id
-  #   for new_index, old_index in enumerate(interface):
-  #     new_asym_id.
+  with open(raw_feature_fn, 'rb') as fh:
+      raw_features=pkl.load(fh)
+  # iptm.append(generate_iptm_scores(raw_features, raw_asym_id))
+  for interface in interfaces:
+    new_asym_id=raw_asym_id
+    # original_index=list(range(len(interface)))
+    for old_index, new_index in enumerate(interface):
+      new_asym_id=np.where(new_asym_id==old_index, new_index, new_asym_id)
+    # print(new_asym_id)
+    iptm.append(generate_iptm_scores(raw_features, new_asym_id))
+      # new_asym_id=np.select([new_asym_id==original_index[0], asym_id==1, asym_id==2], [0, 1, 1], asym_id)
 
+  # print(str(iptm))
   # if prot_native is None:
   #   rms_out = -1
   # else:
@@ -368,7 +384,7 @@ def write_results(decoy, result, prot_native=None, mismatch=False):
 
   with open(args.output_dir + args.name + "/results/results_{}.csv".format(decoy.target), "a") as f:
     result_fields = [str(x) for x in list(decoy) + [pdb_out_path, rms_out, tm_diff, tm_out, plddt, ptm]]
-    f.write(",".join(result_fields) + "\n")
+    f.write(",".join(result_fields)+","+str(iptm) + "\n")
 
     if args.verbose:
       print(",".join([x + "=" + y for x,y in zip(csv_headers, result_fields)]))
@@ -455,9 +471,11 @@ for n in natives_list:
     runner = make_model_runner(model_name, args.recycles)
     Ls=np.bincount(prot.chain_index).tolist()
 
-    raw_feature_fn = args.output_dir + "/features/" + args.name + "_" + d.decoy_id + "_raw_results.pkl"
+    raw_feature_fn = args.output_dir + args.name + "/features/" + d.decoy_id + "_raw_results.pkl"
     result, mismatch = score_decoy(seq_native, prot, runner, d.decoy_id, raw_feature_fn)
-    write_results(d, result, prot_native=prot if args.use_native else None, mismatch=mismatch)
+
+    interfaces=interface_parser(args.interfaces)
+    write_results(d, result, raw_feature_fn, prot.chain_index, interfaces, prot_native=prot if args.use_native else None, mismatch=mismatch)
 
 
   with open(args.output_dir + args.name + "/finished_targets.txt", 'a') as f:
